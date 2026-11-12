@@ -5,7 +5,8 @@ morning(): A + B (mandag) + C + opsummeringsmail til Michael (kun hvis noget ske
 evening(): kun C
 TEST=ja: alle mails går kun til Michael med [TEST] i emnet, og intet skrives til Drive.
 """
-import datetime as dt, hashlib, html, os, tempfile, traceback
+import datetime as dt, html, os, shutil, subprocess, tempfile, traceback
+from urllib.parse import quote
 import openpyxl
 import gapi
 from gapi import ME
@@ -14,6 +15,50 @@ NY_ARBEJDSGANG = ("Får I en ekstra indtægt eller udgift til Køge Jernmand 202
                   "et beløb sig, så send mig en mail om det. Skriv hvad det drejer sig om, beløbet, om det er inkl. eller "
                   "ekskl. moms, og hvilket område det hører under. Vedhæft gerne tilbud eller faktura. Jeg skriver det ind "
                   "i budgettet, og I får den opdaterede version på mail.")
+
+
+def sbtn(href, label, color="#1F4E78"):
+    """Tydelig, omkranset knap (virker i Gmail, også uden baggrundsfarver)."""
+    return (f'<a href="{html.escape(href)}" style="display:inline-block;margin:6px 6px 0 0;padding:9px 14px;'
+            f'border:2px solid {color};border-radius:8px;color:{color};font-weight:bold;text-decoration:none;'
+            f'font-family:Arial,sans-serif;font-size:14px">{html.escape(label)}</a>')
+
+
+def mailto(subject, body=""):
+    return f"mailto:{ME}?subject={quote(subject, safe='')}&body={quote(body, safe='')}"
+
+
+BUDGET_FELTER = "Post: \nOmråde: \nBeløb (kr.): \nInkl./ekskl. moms: \nKommentar: "
+
+
+def budget_buttons():
+    return ('<p style="margin:14px 0 4px"><b>Ret i budgettet</b> – tryk på en knap, udfyld og send:</p>'
+            + sbtn(mailto("KJ27 budget – ret beløb", BUDGET_FELTER), "Ret et beløb")
+            + sbtn(mailto("KJ27 budget – ny indtægt/udgift", "Type (indtægt/udgift): \n" + BUDGET_FELTER), "Tilføj indtægt/udgift", "#516B46")
+            + sbtn(mailto("KJ27 budget – slet post", "Post: \nBegrundelse: "), "Slet en post", "#C62828"))
+
+
+def plan_buttons(kj, tasks):
+    """Knapper pr. område til status-/ugemails: opdatér områdets opgaver, tilføj, slet."""
+    rows = []
+    for a in kj.SHEETS:
+        ts = [t for t in tasks if t["area"] == a and t["pct"] < 1]
+        b = sbtn(kj.mailto(a, kj.NEW_TASK_BLOCK), "+ Ny opgave", "#516B46")
+        href = kj._all_href(a, ts) if ts else None   # None når listen er for lang til ét mail-link
+        b = sbtn(href or kj.mailto(a, "<ID> <hvad skal ændres>\n"), "Opdatér opgaver") + b
+        b += sbtn(kj.mailto(a, "Slet opgave: <ID>\nBegrundelse: "), "Slet opgave", "#C62828")
+        rows.append(f'<div style="margin:10px 0 0"><b>{html.escape(a.replace("_", " og "))}</b><br>{b}</div>')
+    return ('<div style="margin:16px 0 0;font-family:Arial,sans-serif;font-size:14px"><b>Ret i planen</b> – '
+            'tryk på en knap, ret teksten i mailen og send:' + "".join(rows) + "</div>")
+
+
+def to_pdf(xlsx, outdir):
+    """Laver en PDF af budgettet med LibreOffice (installeres kun når der er brug for det)."""
+    if not shutil.which("soffice"):
+        subprocess.run("sudo apt-get update -qq && sudo apt-get install -y -qq libreoffice-calc-nogui",
+                       shell=True, check=True, timeout=600)
+    subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", outdir, xlsx], check=True, timeout=300)
+    return os.path.join(outdir, os.path.splitext(os.path.basename(xlsx))[0] + ".pdf")
 
 
 class Ctx:
@@ -96,7 +141,8 @@ def part_b(c, kj, today, plan, cfg):
         c.log.append("Statusmail: allerede sendt i dag")
         return False
     to = [e for e in st["to"] if not gapi.EXCLUDE.search(e)]
-    c.send(to, st["subject"], st["body"], st["html"], [ME])
+    h = st["html"].replace("<p>Mange hilsner", plan_buttons(kj, kj.load_tasks(plan)) + "<p>Mange hilsner", 1)
+    c.send(to, st["subject"], st["body"], h, [ME])
     c.log.append(f"Statusmail sendt til {len(to)} modtagere")
     return True
 
@@ -159,19 +205,24 @@ def part_c(c, today):
     tal = [f"Indtægter i alt: {k('INDTÆGTER I ALT')}", f"Udgifter i alt: {k('UDGIFTER I ALT')}", f"Resultat: {k('RESULTAT')}"]
     body = ("Hej alle,\n\nBudgettet for Køge Jernmand 2027 er opdateret, og den nye version er vedhæftet.\n\n"
             + "\n".join(tal) + "\n\nÆndret siden sidste udsendelse:\n" + "\n".join("- " + d for d in vis)
-            + "\n\nSig til, hvis noget skal rettes.\n\nNy arbejdsgang for ekstra indtægter og udgifter\n"
+            + "\n\nSig til, hvis noget skal rettes – svar på denne mail, eller brug knapperne i mailen.\n\nNy arbejdsgang for ekstra indtægter og udgifter\n"
             + NY_ARBEJDSGANG + "\n\nMange hilsner\nMichael Mark")
     e = html.escape
     h = ("<div style=\"font-family:Arial,sans-serif;font-size:14px\"><p>Hej alle,</p>"
          "<p>Budgettet for Køge Jernmand 2027 er opdateret, og den nye version er vedhæftet.</p><p>"
          + "<br>".join(e(t) for t in tal) + "</p><p>Ændret siden sidste udsendelse:</p><ul>"
-         + "".join(f"<li>{e(d)}</li>" for d in vis) + "</ul><p>Sig til, hvis noget skal rettes.</p>"
-         "<p><b>Ny arbejdsgang for ekstra indtægter og udgifter</b><br>" + e(NY_ARBEJDSGANG) + "</p>"
+         + "".join(f"<li>{e(d)}</li>" for d in vis) + "</ul>" + budget_buttons()
+         + "<p><b>Ny arbejdsgang for ekstra indtægter og udgifter</b><br>" + e(NY_ARBEJDSGANG) + "</p>"
          "<p>Mange hilsner<br>Michael Mark</p></div>")
-    data = open(new, "rb").read()
-    c.send(to, "Opdateret budget Køge Jernmand 2027", body, h, [ME],
-           [("Køge-Jernmand-2027-budget.xlsx", data,
-             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")])
+    att = []
+    try:
+        pdf = to_pdf(new, c.dir)
+        att = [(f"Køge-Jernmand-2027-budget {today:%d-%m-%Y}.pdf", open(pdf, "rb").read(), "application/pdf")]
+    except Exception as ex:
+        c.errors.append(f"Budget-PDF kunne ikke laves ({ex}); mailen er sendt uden vedhæftning")
+        body = body.replace("og den nye version er vedhæftet", "men PDF'en kunne ikke vedhæftes denne gang")
+        h = h.replace("og den nye version er vedhæftet", "men PDF'en kunne ikke vedhæftes denne gang")
+    c.send(to, "Opdateret budget Køge Jernmand 2027", body, h, [ME], att)
     if not c.test:
         gapi.update(sf["id"], new)   # sammenligningskopien opdateres i samme fil
     c.log.append(f"Opdateret budget sendt til {len(to)} modtagere ({len(diffs)} ændrede celler)")

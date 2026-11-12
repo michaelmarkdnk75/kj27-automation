@@ -147,8 +147,11 @@ def build(kj, plan, bpath, today):
 
     action = sorted([t for t in tasks if t["st"] == "Forsinket" or (t["st"] != "Færdig" and t["dage_til_slut"] is not None
                      and 0 <= t["dage_til_slut"] <= 30)], key=lambda t: t["slut"])
+    import sky
+    ob = lambda t: (sky.sbtn(kj.mailto(t["area"], kj.task_block(t)), "Opdatér")
+                    + sky.sbtn(kj.mailto(t["area"], f"Slet opgave: {t['id']} {t['aktivitet']}\nBegrundelse: "), "Slet", "#C62828"))
     act_l = [f"<b>{e(t['id'])} {e(t['aktivitet'])}</b> · {e(t['ansvarlig'] or 'ejer mangler')} · slut {f(t['slut'])} · "
-             f"{round(t['pct'] * 100)}%{' · ' + e(lc(t)) if lc(t) else ''}" for t in action]
+             f"{round(t['pct'] * 100)}%{' · ' + e(lc(t)) if lc(t) else ''}<br>{ob(t)}" for t in action]
     upc = sorted([t for t in tasks if t["st"] != "Færdig" and t["start"] and t["start"] >= today], key=lambda t: (t["start"], t["id"]))
     nxt5 = upc[:5]
     extra = len([t for t in upc[5:] if nxt5 and t["start"] == nxt5[-1]["start"]])
@@ -158,7 +161,7 @@ def build(kj, plan, bpath, today):
         for t in [t for t in fix if t["area"] == a]:
             why = "slutdato efter stævnet" if t["datofejl"] else "ejer mangler"
             fix_l.append(f"{e(area_name(a))}: {e(t['id'])} {e(t['aktivitet'])} · {e(t['ansvarlig'] or '–')} · "
-                         f"{f(t['start'])}–{f(t['slut'])} ({why})")
+                         f"{f(t['start'])}–{f(t['slut'])} ({why})<br>{ob(t)}")
     done = sorted([t for t in tasks if t["st"] == "Færdig"], key=lambda t: t["id"])
     prev, found = prev_done(today)
     new_closed = [t for t in done if t["id"] not in prev]
@@ -248,7 +251,8 @@ def build(kj, plan, bpath, today):
             + ("" if found else "<br><span style=\"font-size:12px;color:#555\">Sammenlignet med 05-11-2026.</span>")),
         sec(f"Færdige opgaver ({len(done)})", ul(cap([f"{check} {e(t['aktivitet'])} · {e(area_name(t['area']))} · "
                                                    f"{e(t['ansvarlig'] or '–')} · {e(t['id'])}" for t in done])) or "Ingen endnu."),
-        sec("Budget 2027", budget_html),
+        sec("Budget 2027", budget_html + sky.budget_buttons()),
+        sec("Ret, tilføj eller slet opgaver", sky.plan_buttons(kj, tasks)),
         sec("Kommende møder", ul([f"{e(s)} – {DAGE[d.weekday()]} {d:%d-%m-%Y}" + (f" kl. {d:%H:%M}" if d.hour or d.minute else "")
                                   for d, s in mtg]) or "Ingen KJ27-møder de næste 14 dage."),
     ]
@@ -274,18 +278,21 @@ def build(kj, plan, bpath, today):
             f"SAMLET STATUS: {worst} – {rag_txt}",
             f"{tot['Færdig']}/{tot['n']} færdige · {round(tot['prog'] * 100)}% fremdrift · {tot['Forsinket']} forsinkede · "
             f"{tot['I gang']} i gang · {tot['Ikke startet']} ikke startet · {tot['df']} datoer skal rettes", ""]
-    for title, lst in (("KRÆVER HANDLING", cap(act_l) or ["Ingen forsinkede og ingen deadlines de næste 30 dage."]),
+    nob = lambda x: re.sub(r"<br><a .*$", "", x)
+    act_l_t, fix_l_t = [nob(x) for x in act_l], [nob(x) for x in fix_l]
+    for title, lst in (("KRÆVER HANDLING", cap(act_l_t) or ["Ingen forsinkede og ingen deadlines de næste 30 dage."]),
                        ("TOP-RISICI", risks or ["Ingen risici fundet i data."]), ("BESLUTNINGER DER KRÆVES", dec or ["Ingen."]),
                        ("STATUS PR. OMRÅDE", [f"{area_name(a)} ({stats[a]['rag']}): {round(stats[a]['prog'] * 100)}% · {stats[a]['n']} opgaver · "
                                               f"{stats[a]['Færdig']} færdige · {stats[a]['Forsinket']} forsinkede · {stats[a]['df']} datofejl" for a in AREAS]),
                        ("NÆSTE OPGAVER DER STARTER", [f"{f(t['start'])}: {t['aktivitet']} · {area_name(t['area'])} · {t['ansvarlig'] or '–'} · {t['id']}"
                                                       for t in nxt5] + ([strip(nxt_html[-1])] if extra else []) or ["Ingen."]),
-                       ("RET I PLANEN", cap(fix_l, 12) or ["Intet at rette."]),
+                       ("RET I PLANEN", cap(fix_l_t, 12) or ["Intet at rette."]),
                        ("LUKKET SIDEN SIDST", [f"{t['id']} {t['aktivitet']}" for t in new_closed] or ["Ingen nye lukkede siden forrige rapport"]),
                        ("BUDGET 2027", [strip(x) for x in budget_html.split("<br>") if strip(x).strip()]),
                        ("KOMMENDE MØDER", [f"{s} – {d:%d-%m-%Y %H:%M}" for d, s in mtg] or ["Ingen."])):
         txt += [title] + [strip(x) for x in lst] + [""]
-    txt += [f"Færdige-id: {', '.join(t['id'] for t in done)}", "", "Mange hilsner", "Michael Mark"]
+    txt += ["Ret, tilføj eller slet: svar på denne mail, eller brug knapperne i HTML-udgaven.", "",
+            f"Færdige-id: {', '.join(t['id'] for t in done)}", "", "Mange hilsner", "Michael Mark"]
     return htm, "\n".join(txt)
 
 
