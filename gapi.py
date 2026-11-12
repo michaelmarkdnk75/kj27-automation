@@ -11,6 +11,18 @@ from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 import requests
 
+_orig_rfs = requests.Response.raise_for_status
+
+
+def _rfs(self):
+    """Vis Googles fejltekst i loggen, så fejl kan forstås."""
+    if self.status_code >= 400:
+        print(f"Google-fejl {self.status_code} {self.url.split('?')[0]}: {self.text[:600]}")
+    return _orig_rfs(self)
+
+
+requests.Response.raise_for_status = _rfs
+
 ME = "michaelmarkdnk@gmail.com"
 DRV = "https://www.googleapis.com/drive/v3"
 UPL = "https://www.googleapis.com/upload/drive/v3"
