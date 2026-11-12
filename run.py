@@ -27,6 +27,9 @@ def main():
             return
     else:
         job = os.environ.get("JOB", "").strip()
+    if os.path.exists(os.path.join(os.path.dirname(__file__), "PAUSE")) and not test:
+        print("PAUSE-fil findes: kører i testtilstand (kun mail til Michael, intet skrives til Drive)")
+        test = True
     if job == "sky-morgen":
         import sky; sky.morning(today, test)
     elif job == "sky-aften":
