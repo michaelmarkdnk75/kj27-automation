@@ -18,7 +18,24 @@ CAL = "https://www.googleapis.com/calendar/v3"
 _tok = {}
 
 
-def _h():
+def _oauth(kind):
+    """Midlertidig login med refresh token (udløber efter 7 dage, mens Google-appen er i testtilstand)."""
+    if kind not in _tok:
+        r = requests.post("https://oauth2.googleapis.com/token", timeout=30, data=dict(
+            client_id=os.environ["GOOGLE_CLIENT_ID"], client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+            refresh_token=os.environ[f"REFRESH_TOKEN_{kind}"], grant_type="refresh_token"))
+        r.raise_for_status()
+        _tok[kind] = r.json()["access_token"]
+    return {"Authorization": "Bearer " + _tok[kind]}
+
+
+USE_OAUTH = bool(os.environ.get("REFRESH_TOKEN_DRIVE")) and not os.environ.get("GOOGLE_SA_JSON")
+CAL_ID = "primary" if USE_OAUTH else ME
+
+
+def _h(kind="DRIVE"):
+    if USE_OAUTH:
+        return _oauth(kind)
     if "sa" not in _tok:
         from google.oauth2 import service_account
         from google.auth.transport.requests import Request
@@ -79,6 +96,13 @@ def send(to, subject, body, html=None, cc=None, attachments=()):
     for fname, data, mime in attachments:
         mt, st = mime.split("/", 1)
         m.add_attachment(data, maintype=mt, subtype=st, filename=fname)
+    if USE_OAUTH:
+        import base64
+        raw = base64.urlsafe_b64encode(m.as_bytes()).decode()
+        r = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", headers=_oauth("MAIL"),
+                          json={"raw": raw}, timeout=60)
+        r.raise_for_status()
+        return r.json()["id"]
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as s:
         s.login(ME, os.environ["GMAIL_APP_PASSWORD"].replace(" ", ""))
         s.send_message(m)
@@ -95,7 +119,12 @@ def _imap():
 
 
 def search(q, n=10):
-    """Gmail-søgning (samme syntaks som i Gmail). Returnerer de nyeste uid'er først."""
+    """Gmail-søgning (samme syntaks som i Gmail). Returnerer de nyeste først."""
+    if USE_OAUTH:
+        r = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=_oauth("MAIL"),
+                         params=dict(q=q, maxResults=n), timeout=30)
+        r.raise_for_status()
+        return [m["id"] for m in r.json().get("messages", [])]
     im = _imap()
     try:
         im.literal = q.encode("utf-8")          # sendes som IMAP-literal, så æøå virker
@@ -107,6 +136,22 @@ def search(q, n=10):
 
 
 def plain_text(uid):
+    if USE_OAUTH:
+        import base64
+        r = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{uid}", headers=_oauth("MAIL"),
+                         params=dict(format="full"), timeout=30)
+        r.raise_for_status()
+        msg = r.json()
+
+        def walk(p):
+            if p.get("mimeType") == "text/plain" and p.get("body", {}).get("data"):
+                return base64.urlsafe_b64decode(p["body"]["data"]).decode("utf-8", "replace")
+            for c in p.get("parts", []) or []:
+                t = walk(c)
+                if t:
+                    return t
+            return ""
+        return walk(msg["payload"]), int(msg.get("internalDate", 0))
     im = _imap()
     try:
         _, d = im.uid("FETCH", uid, "(RFC822)")
@@ -126,7 +171,7 @@ def plain_text(uid):
 
 # ------------------------------------------------------------------ Kalender (Michaels kalender delt med servicekontoen)
 def events(time_min, time_max, q=None):
-    r = requests.get(f"{CAL}/calendars/{ME}/events", headers=_h(), timeout=30, params=dict(
+    r = requests.get(f"{CAL}/calendars/{CAL_ID}/events", headers=_h("MAIL"), timeout=30, params=dict(
         timeMin=time_min, timeMax=time_max, q=q or "", singleEvents="true", orderBy="startTime", maxResults=50))
     r.raise_for_status()
     return r.json().get("items", [])
