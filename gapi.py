@@ -30,6 +30,9 @@ def _oauth(kind):
 
 
 USE_OAUTH = bool(os.environ.get("REFRESH_TOKEN_DRIVE")) and not os.environ.get("GOOGLE_SA_JSON")
+if not USE_OAUTH and not os.environ.get("GOOGLE_SA_JSON"):
+    raise SystemExit("Mangler GitHub-hemmeligheder: enten REFRESH_TOKEN_MAIL + REFRESH_TOKEN_DRIVE + GOOGLE_CLIENT_ID + "
+                     "GOOGLE_CLIENT_SECRET, eller GOOGLE_SA_JSON + GMAIL_APP_PASSWORD.")
 CAL_ID = "primary" if USE_OAUTH else ME
 
 
