@@ -36,6 +36,8 @@ def main():
         import sky; sky.morning(today, test)
     elif job == "sky-aften":
         import sky; sky.evening(today, test)
+    elif job == "budget-ret":
+        import budget_ret; budget_ret.run(test)
     elif job == "ugerapport":
         import ugerapport; ugerapport.run(today, test)
     else:
