@@ -12,7 +12,7 @@ on:
       job:
         description: 'Job'
         type: choice
-        options: [sky-morgen, sky-aften, ugerapport]
+        options: [indskriv, sky-morgen, sky-aften, ugerapport]
         default: sky-morgen
       test:
         description: 'Test: send kun til Michael og skriv intet til Drive'

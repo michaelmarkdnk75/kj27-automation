@@ -6,7 +6,7 @@ Hemmeligheder (GitHub Secrets -> miljøvariabler):
                       og Michaels kalender deles med den (Se alle oplysninger om begivenheder).
   GMAIL_APP_PASSWORD  app-adgangskode til michaelmarkdnk@gmail.com (sender via SMTP, søger via IMAP).
 """
-import email, imaplib, json, os, re, smtplib
+import email, email.header, imaplib, json, os, re, smtplib
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 import requests
@@ -196,3 +196,54 @@ def active_recipients(leaders):
                 if e and not EXCLUDE.search(e) and e.lower() not in [x.lower() for x in out]:
                     out.append(e)
     return out
+
+
+# ------------------------------------------------------------------ hele mails (til indskrivning af svar)
+def messages(q, n=100):
+    """Mails der matcher Gmail-søgningen, ældste først:
+    dict(id (Gmail-id i hex), thread, sender_email, sender_name, subject, ts (ms), text)."""
+    out = []
+    if USE_OAUTH:
+        import base64
+        ids = search(q, n)
+        for mid in ids:
+            r = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}", headers=_oauth("MAIL"),
+                             params=dict(format="full"), timeout=30)
+            r.raise_for_status()
+            m = r.json()
+            hd = {h["name"].lower(): h["value"] for h in m["payload"].get("headers", [])}
+
+            def walk(p):
+                if p.get("mimeType") == "text/plain" and p.get("body", {}).get("data"):
+                    return base64.urlsafe_b64decode(p["body"]["data"]).decode("utf-8", "replace")
+                for c in p.get("parts", []) or []:
+                    t = walk(c)
+                    if t:
+                        return t
+                return ""
+            out.append(_msg(m["id"], m["threadId"], hd.get("from", ""), hd.get("subject", ""),
+                            int(m.get("internalDate", 0)), walk(m["payload"])))
+    else:
+        im = _imap()
+        try:
+            im.literal = q.encode("utf-8")
+            _, d = im.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
+            for uid in d[0].split()[-n:]:
+                _, f = im.uid("FETCH", uid, "(X-GM-MSGID X-GM-THRID RFC822)")
+                meta = f[0][0].decode()
+                gid = format(int(re.search(r"X-GM-MSGID (\d+)", meta).group(1)), "x")
+                tid = format(int(re.search(r"X-GM-THRID (\d+)", meta).group(1)), "x")
+                msg = email.message_from_bytes(f[0][1])
+                part = next((p for p in msg.walk() if p.get_content_type() == "text/plain"), None)
+                txt = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "replace") if part else ""
+                ts = int(parsedate_to_datetime(msg["Date"]).timestamp() * 1000) if msg["Date"] else 0
+                out.append(_msg(gid, tid, msg.get("From", ""), str(email.header.make_header(email.header.decode_header(msg.get("Subject", "")))), ts, txt))
+        finally:
+            im.logout()
+    return sorted(out, key=lambda m: m["ts"])
+
+
+def _msg(mid, tid, frm, subject, ts, text):
+    from email.utils import parseaddr
+    name, addr = parseaddr(frm)
+    return dict(id=mid, thread=tid, sender_email=addr.lower(), sender_name=name or addr, subject=subject, ts=ts, text=text)

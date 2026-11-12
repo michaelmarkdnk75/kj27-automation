@@ -238,13 +238,46 @@ def _safe(c, name, fn):
         traceback.print_exc()
 
 
+def do_ingest(c, today, plan, plan_meta, cfg_meta):
+    """Skriv områdeledernes svar ind i planen før alt andet. Returnerer (plan-sti, ny cfg-meta)."""
+    import ingest
+    c.ingest_n = 0
+    try:
+        n, lines = ingest.run(c, c.kj, plan, c.cfg, cfg_meta, plan_meta, today)
+        c.ingest_n = n
+        if lines:
+            c.log.append("Svar fra områdelederne:")
+            c.log += ["  " + x for x in lines]
+        if getattr(c, "new_plan", None):
+            plan = c.new_plan
+        cfg_meta = gapi.meta(cfg_meta["id"])
+    except Exception as e:
+        c.errors.append(f"Indskrivning af svar: {e}")
+        traceback.print_exc()
+    return plan, cfg_meta
+
+
+def ingest_only(today, test):
+    """Kun indskrivning af svar + mail til Michael (sender aldrig til udvalget)."""
+    c = Ctx(test)
+    c.kj = load_kj27(c)
+    plan_meta, plan = fetch(c, gapi.KJ27_FOLDER, "Køge-Jernmand-2027-planlægnig.xlsx")
+    cfg_meta, c.cfg = fetch(c, gapi.AUTO_FOLDER, "KJ27-områdeledere.xlsx")
+    do_ingest(c, today, plan, plan_meta, cfg_meta)
+    body = "\n".join(c.log or ["Ingen nye svar fra områdelederne."]) + \
+        ("\n\nFejl:\n" + "\n".join(c.errors) if c.errors else "") + "\n\nMange hilsner"
+    gapi.send([ME], f"{'[TEST] ' if test else ''}KJ27 svar indskrevet i planen {today:%d-%m-%Y}", body)
+    print(f"KJ27 indskrivning: {c.ingest_n} rettelser; fejl: {len(c.errors)}")
+
+
 def morning(today, test):
     c = Ctx(test)
     a = b = 0
     try:
         c.kj = load_kj27(c)
-        _, plan = fetch(c, gapi.KJ27_FOLDER, "Køge-Jernmand-2027-planlægnig.xlsx")
+        plan_meta, plan = fetch(c, gapi.KJ27_FOLDER, "Køge-Jernmand-2027-planlægnig.xlsx")
         cfg_meta, c.cfg = fetch(c, gapi.AUTO_FOLDER, "KJ27-områdeledere.xlsx")
+        plan, cfg_meta = do_ingest(c, today, plan, plan_meta, cfg_meta)
         a = _safe(c, "Påmindelser", lambda: part_a(c, c.kj, today, plan, cfg_meta, c.cfg)) or 0
         if today.weekday() == 0:
             b = _safe(c, "Statusmail", lambda: part_b(c, c.kj, today, plan, c.cfg))
@@ -252,7 +285,7 @@ def morning(today, test):
         c.errors.append(f"Filer kunne ikke hentes: {e}")
         traceback.print_exc()
     n = _safe(c, "Budget", lambda: part_c(c, today)) if hasattr(c, "kj") else None
-    if a or b or n or c.errors:
+    if a or b or n or c.errors or getattr(c, "ingest_n", 0) or any("Svar fra" in x for x in c.log):
         lines = c.log + ([""] + ["Fejl: " + x for x in c.errors] if c.errors else [])
         body = "\n".join(lines) + "\n\nMange hilsner"
         c.send([ME], f"KJ27 påmindelser – status {today:%d-%m-%Y}", body)
@@ -265,11 +298,14 @@ def evening(today, test):
     n = None
     try:
         c.kj = load_kj27(c)
-        _, c.cfg = fetch(c, gapi.AUTO_FOLDER, "KJ27-områdeledere.xlsx")
+        plan_meta, plan = fetch(c, gapi.KJ27_FOLDER, "Køge-Jernmand-2027-planlægnig.xlsx")
+        cfg_meta, c.cfg = fetch(c, gapi.AUTO_FOLDER, "KJ27-områdeledere.xlsx")
+        do_ingest(c, today, plan, plan_meta, cfg_meta)
         n = part_c(c, today)
     except Exception as e:
         c.errors.append(f"Budget: {e}")
         traceback.print_exc()
-    if c.errors:
-        c.send([ME], f"KJ27 budget-tjek fejlede {today:%d-%m-%Y}", "\n".join(c.errors) + "\n\nMange hilsner")
+    if c.errors or c.log:
+        gapi.send([ME], f"KJ27 aften {today:%d-%m-%Y}: svar indskrevet / budget",
+                  "\n".join(c.log + ["Fejl: " + x for x in c.errors]) + "\n\nMange hilsner")
     print(f"KJ27 sky aften: budget {'sendt til ' + str(n) if n else 'ingen ændringer'}; fejl: {len(c.errors)}")
