@@ -211,17 +211,24 @@ def active_recipients(leaders):
 
 
 # ------------------------------------------------------------------ hele mails (til indskrivning af svar)
-def messages(q, n=100):
+def messages(q, n=100, skip=()):
     """Mails der matcher Gmail-søgningen, ældste først:
     dict(id (Gmail-id i hex), thread, sender_email, sender_name, subject, ts (ms), text)."""
     out = []
     if USE_OAUTH:
         import base64
-        ids = search(q, n)
+        import time
+        ids = [i for i in search(q, n) if i not in skip]       # kun mails der ikke er behandlet
         for mid in ids:
-            r = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}", headers=_oauth("MAIL"),
-                             params=dict(format="full"), timeout=30)
+            for forsoeg in range(5):
+                r = requests.get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}", headers=_oauth("MAIL"),
+                                 params=dict(format="full"), timeout=30)
+                if r.status_code in (403, 429) and "uota" in r.text:
+                    time.sleep(15 * (forsoeg + 1))             # Gmails minutkvote: vent og prøv igen
+                    continue
+                break
             r.raise_for_status()
+            time.sleep(0.3)
             m = r.json()
             hd = {h["name"].lower(): h["value"] for h in m["payload"].get("headers", [])}
 
@@ -241,6 +248,9 @@ def messages(q, n=100):
             im.literal = q.encode("utf-8")
             _, d = im.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
             for uid in d[0].split()[-n:]:
+                _, f0 = im.uid("FETCH", uid, "(X-GM-MSGID)")
+                if format(int(re.search(rb"X-GM-MSGID (\d+)", f0[0]).group(1)), "x") in skip:
+                    continue
                 _, f = im.uid("FETCH", uid, "(X-GM-MSGID X-GM-THRID RFC822)")
                 meta = f[0][0].decode()
                 gid = format(int(re.search(r"X-GM-MSGID (\d+)", meta).group(1)), "x")

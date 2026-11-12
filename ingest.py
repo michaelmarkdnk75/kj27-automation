@@ -28,7 +28,7 @@ def run(c, kj, plan, cfg, cfg_meta, plan_meta, today):
                 known_mail.setdefault(e.strip().lower(), l["navn"])
     done = set(kj.processed(cfg))
     areas = {a.lower().replace("_", " "): a for a in kj.SHEETS}
-    msgs = gapi.messages('newer_than:60d (subject:"KJ27 opdatering" OR subject:"KJ27 dato")', 300)
+    msgs = gapi.messages('newer_than:60d -from:me (subject:"KJ27 opdatering" OR subject:"KJ27 dato")', 300, skip=done)
     lines, applied_ids, all_updates, marks = [], [], [], []
     for m in msgs:
         if m["id"] in done:
