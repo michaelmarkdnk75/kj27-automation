@@ -98,7 +98,8 @@ def search(q, n=10):
     """Gmail-søgning (samme syntaks som i Gmail). Returnerer de nyeste uid'er først."""
     im = _imap()
     try:
-        _, d = im.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW", f'"{q.replace(chr(34), chr(92) + chr(34))}"'.encode())
+        im.literal = q.encode("utf-8")          # sendes som IMAP-literal, så æøå virker
+        _, d = im.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW")
         ids = d[0].split()[::-1][:n]
         return [i.decode() for i in ids]
     finally:
