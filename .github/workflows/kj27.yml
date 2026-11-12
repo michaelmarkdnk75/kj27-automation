@@ -1,0 +1,41 @@
+name: KJ27
+on:
+  schedule:
+    - cron: '47 4 * * *'    # 06:47 dansk sommertid – KJ27 sky morgen
+    - cron: '47 5 * * *'    # 06:47 dansk vintertid
+    - cron: '47 18 * * *'   # 20:47 sommertid – KJ27 sky aften (budget)
+    - cron: '47 19 * * *'   # 20:47 vintertid
+    - cron: '23 5 * * 1'    # mandag 07:23 sommertid – ugerapport
+    - cron: '23 6 * * 1'    # mandag 07:23 vintertid
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job'
+        type: choice
+        options: [sky-morgen, sky-aften, ugerapport]
+        default: sky-morgen
+      test:
+        description: 'Test: send kun til Michael og skriv intet til Drive'
+        type: choice
+        options: ['ja', 'nej']
+        default: 'ja'
+concurrency: kj27
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python run.py
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          JOB: ${{ inputs.job }}
+          TEST: ${{ inputs.test }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          REFRESH_TOKEN_MAIL: ${{ secrets.REFRESH_TOKEN_MAIL }}
+          REFRESH_TOKEN_DRIVE: ${{ secrets.REFRESH_TOKEN_DRIVE }}
