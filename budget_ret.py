@@ -125,7 +125,7 @@ def run(test):
     ME = gapi.ME
     subprocess.run("sudo apt-get update -qq && sudo apt-get install -y -qq libreoffice-calc-nogui python3-uno",
                    shell=True, check=True, timeout=900)
-    fid = gapi.find(gapi.KJ27_FOLDER, "Køge-Jernmand-2027-budget.xlsx")
+    fid = gapi.find(gapi.KJ27_FOLDER, "Køge-Jernmand-2027-budget.xlsx")["id"]
     meta = gapi.meta(fid)
     d = tempfile.mkdtemp(); p = os.path.join(d, "budget.xlsx")
     gapi.download(fid, p)
