@@ -1,57 +1,57 @@
-"""Små hjælpere til Google API (Drive, Gmail, Calendar) via REST og refresh tokens.
+"""Små hjælpere til Google (Drive, Gmail, Calendar) uden OAuth-login, der udløber.
 
 Hemmeligheder (GitHub Secrets -> miljøvariabler):
-  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
-  REFRESH_TOKEN_MAIL   (michaelmarkdnk@gmail.com: gmail.send, gmail.readonly, calendar.readonly)
-  REFRESH_TOKEN_DRIVE  (koegejernmand@gmail.com: drive) – ejer af KJ27-filerne
+  GOOGLE_SA_JSON      hele JSON-nøglen for servicekontoen (Drive + kalender).
+                      KJ27-mappen og Automatik-mappen deles med servicekontoens mail som Redaktør,
+                      og Michaels kalender deles med den (Se alle oplysninger om begivenheder).
+  GMAIL_APP_PASSWORD  app-adgangskode til michaelmarkdnk@gmail.com (sender via SMTP, søger via IMAP).
 """
-import base64, os, re
+import email, imaplib, json, os, re, smtplib
 from email.message import EmailMessage
+from email.utils import parsedate_to_datetime
 import requests
 
-_tok = {}
+ME = "michaelmarkdnk@gmail.com"
 DRV = "https://www.googleapis.com/drive/v3"
 UPL = "https://www.googleapis.com/upload/drive/v3"
-GM = "https://gmail.googleapis.com/gmail/v1/users/me"
 CAL = "https://www.googleapis.com/calendar/v3"
+_tok = {}
 
 
-def _token(kind):
-    if kind not in _tok:
-        r = requests.post("https://oauth2.googleapis.com/token", timeout=30, data=dict(
-            client_id=os.environ["GOOGLE_CLIENT_ID"], client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
-            refresh_token=os.environ[f"REFRESH_TOKEN_{kind}"], grant_type="refresh_token"))
-        r.raise_for_status()
-        _tok[kind] = r.json()["access_token"]
-    return _tok[kind]
+def _h():
+    if "sa" not in _tok:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
+        c = service_account.Credentials.from_service_account_info(
+            json.loads(os.environ["GOOGLE_SA_JSON"]),
+            scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/calendar.readonly"])
+        c.refresh(Request())
+        _tok["sa"] = c.token
+    return {"Authorization": "Bearer " + _tok["sa"]}
 
 
-def _h(kind):
-    return {"Authorization": "Bearer " + _token(kind)}
-
-
-# ------------------------------------------------------------------ Drive (som koegejernmand)
+# ------------------------------------------------------------------ Drive
 def find(folder, name):
     """Nyeste fil med præcis dette navn i mappen."""
     q = f"'{folder}' in parents and name = '{name}' and trashed = false"
-    r = requests.get(DRV + "/files", headers=_h("DRIVE"), timeout=30, params=dict(
-        q=q, orderBy="createdTime desc", fields="files(id,name,createdTime,modifiedTime,md5Checksum)"))
+    r = requests.get(DRV + "/files", headers=_h(), timeout=30, params=dict(
+        q=q, orderBy="createdTime desc", fields="files(id,name,createdTime,modifiedTime,md5Checksum)",
+        supportsAllDrives="true", includeItemsFromAllDrives="true"))
     r.raise_for_status()
     f = r.json()["files"]
     if not f:
-        raise FileNotFoundError(f"{name} findes ikke i Drive-mappen")
+        raise FileNotFoundError(f"{name} findes ikke i Drive-mappen (er mappen delt med servicekontoen?)")
     return f[0]
 
 
 def meta(fid):
-    r = requests.get(f"{DRV}/files/{fid}", headers=_h("DRIVE"), timeout=30,
-                     params=dict(fields="id,name,modifiedTime,md5Checksum"))
+    r = requests.get(f"{DRV}/files/{fid}", headers=_h(), timeout=30, params=dict(fields="id,name,modifiedTime,md5Checksum"))
     r.raise_for_status()
     return r.json()
 
 
 def download(fid, path):
-    r = requests.get(f"{DRV}/files/{fid}", headers=_h("DRIVE"), params=dict(alt="media"), timeout=120)
+    r = requests.get(f"{DRV}/files/{fid}", headers=_h(), params=dict(alt="media"), timeout=120)
     r.raise_for_status()
     open(path, "wb").write(r.content)
     return path
@@ -59,16 +59,16 @@ def download(fid, path):
 
 def update(fid, path, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
     """Overskriver indholdet i den eksisterende fil (samme fil-id, ingen kopi)."""
-    r = requests.patch(f"{UPL}/files/{fid}", headers={**_h("DRIVE"), "Content-Type": mime},
+    r = requests.patch(f"{UPL}/files/{fid}", headers={**_h(), "Content-Type": mime},
                        params=dict(uploadType="media"), data=open(path, "rb").read(), timeout=120)
     r.raise_for_status()
     return r.json()
 
 
-# ------------------------------------------------------------------ Gmail (som michaelmarkdnk)
+# ------------------------------------------------------------------ Gmail (SMTP/IMAP med app-adgangskode)
 def send(to, subject, body, html=None, cc=None, attachments=()):
     m = EmailMessage()
-    m["From"] = "Michael Mark <michaelmarkdnk@gmail.com>"
+    m["From"] = f"Michael Mark <{ME}>"
     m["To"] = ", ".join(to)
     if cc:
         m["Cc"] = ", ".join(cc)
@@ -79,44 +79,59 @@ def send(to, subject, body, html=None, cc=None, attachments=()):
     for fname, data, mime in attachments:
         mt, st = mime.split("/", 1)
         m.add_attachment(data, maintype=mt, subtype=st, filename=fname)
-    raw = base64.urlsafe_b64encode(m.as_bytes()).decode()
-    r = requests.post(GM + "/messages/send", headers=_h("MAIL"), json={"raw": raw}, timeout=60)
-    r.raise_for_status()
-    return r.json()["id"]
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60) as s:
+        s.login(ME, os.environ["GMAIL_APP_PASSWORD"].replace(" ", ""))
+        s.send_message(m)
+    return m["Subject"]
+
+
+def _imap():
+    im = imaplib.IMAP4_SSL("imap.gmail.com")
+    im.login(ME, os.environ["GMAIL_APP_PASSWORD"].replace(" ", ""))
+    _, boxes = im.list()
+    allbox = next(re.search(rb'"([^"]+)"$', b).group(1).decode() for b in boxes if rb"\All" in b)
+    im.select(f'"{allbox}"', readonly=True)
+    return im
 
 
 def search(q, n=10):
-    r = requests.get(GM + "/messages", headers=_h("MAIL"), params=dict(q=q, maxResults=n), timeout=30)
-    r.raise_for_status()
-    return [m["id"] for m in r.json().get("messages", [])]
+    """Gmail-søgning (samme syntaks som i Gmail). Returnerer de nyeste uid'er først."""
+    im = _imap()
+    try:
+        _, d = im.uid("SEARCH", "CHARSET", "UTF-8", "X-GM-RAW", f'"{q.replace(chr(34), chr(92) + chr(34))}"'.encode())
+        ids = d[0].split()[::-1][:n]
+        return [i.decode() for i in ids]
+    finally:
+        im.logout()
 
 
-def plain_text(mid):
-    r = requests.get(f"{GM}/messages/{mid}", headers=_h("MAIL"), params=dict(format="full"), timeout=30)
-    r.raise_for_status()
-    msg = r.json()
+def plain_text(uid):
+    im = _imap()
+    try:
+        _, d = im.uid("FETCH", uid, "(RFC822)")
+        msg = email.message_from_bytes(d[0][1])
+        part = msg.get_body(preferencelist=("plain",)) if hasattr(msg, "get_body") else None
+        if part is None:
+            for p in msg.walk():
+                if p.get_content_type() == "text/plain":
+                    part = p
+                    break
+        txt = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "replace") if part else ""
+        ts = int(parsedate_to_datetime(msg["Date"]).timestamp() * 1000) if msg["Date"] else 0
+        return txt, ts
+    finally:
+        im.logout()
 
-    def walk(p):
-        if p.get("mimeType") == "text/plain" and p.get("body", {}).get("data"):
-            return base64.urlsafe_b64decode(p["body"]["data"]).decode("utf-8", "replace")
-        for c in p.get("parts", []) or []:
-            t = walk(c)
-            if t:
-                return t
-        return ""
-    return walk(msg["payload"]), int(msg.get("internalDate", 0))
 
-
-# ------------------------------------------------------------------ Calendar (som michaelmarkdnk)
+# ------------------------------------------------------------------ Kalender (Michaels kalender delt med servicekontoen)
 def events(time_min, time_max, q=None):
-    r = requests.get(CAL + "/calendars/primary/events", headers=_h("MAIL"), timeout=30, params=dict(
+    r = requests.get(f"{CAL}/calendars/{ME}/events", headers=_h(), timeout=30, params=dict(
         timeMin=time_min, timeMax=time_max, q=q or "", singleEvents="true", orderBy="startTime", maxResults=50))
     r.raise_for_status()
     return r.json().get("items", [])
 
 
 # ------------------------------------------------------------------ fælles
-ME = "michaelmarkdnk@gmail.com"
 # Kontaktes aldrig om KJ27 (Michaels faste regel)
 EXCLUDE = re.compile(r"hertz|simonsigurd|simon\.sigurd|vibeke|rottgarn", re.I)
 KJ27_FOLDER = "1PAUBz_TCoWy-crokJYMgFPPdoavSvmya"
