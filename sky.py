@@ -279,8 +279,7 @@ def morning(today, test):
         cfg_meta, c.cfg = fetch(c, gapi.AUTO_FOLDER, "KJ27-områdeledere.xlsx")
         plan, cfg_meta = do_ingest(c, today, plan, plan_meta, cfg_meta)
         a = _safe(c, "Påmindelser", lambda: part_a(c, c.kj, today, plan, cfg_meta, c.cfg)) or 0
-        if today.weekday() == 0:
-            b = _safe(c, "Statusmail", lambda: part_b(c, c.kj, today, plan, c.cfg))
+        # 14-dages "KJ27 status" er slået fra (Michael 23-11-2026): mandags-ugerapporten er den eneste fælles projektmail.
     except Exception as e:
         c.errors.append(f"Filer kunne ikke hentes: {e}")
         traceback.print_exc()
